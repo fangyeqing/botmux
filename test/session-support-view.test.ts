@@ -21,4 +21,8 @@ describe('support session list metadata', () => {
     expect(sessionSupportReason({ agentAttention: { reason: '需要补充实例 ID' } })).toBe('需要补充实例 ID');
     expect(sessionSupportReason({ pendingRepo: 'unknown', tuiPromptActive: 'unknown' })).toBe('');
   });
+  it('translates raised-hand and TUI prompt signals through dictionary keys instead of showing raw keys', () => {
+    expect(sessionSupportReason({ agentAttention: { kind: 'help', at: 1 } })).toBe('待人工处理');
+    expect(sessionSupportReason({ tuiPromptActive: true })).toBe('待你选择');
+  });
 });
