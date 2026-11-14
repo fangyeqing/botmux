@@ -28472,6 +28472,10 @@ async function handleBotAdded(
     session.lastMessageAt = new Date(now).toISOString();
     session.scope = scope;
     if (pinnedWorkingDir) session.workingDir = pinnedWorkingDir;
+    // An ordinary join opens with the bootstrap, not a user question. Persist the
+    // awaiting-content marker at birth so naming starts from the first accepted
+    // content even if a later title write fails (forced openings carry a real task).
+    if (!forced) session.nativeSessionTitleAwaitingContent = true;
     sessionStore.updateSession(session);
     messageQueue.ensureQueue(anchor);
 
