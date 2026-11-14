@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ReplyDeliveryStore, REPLY_DELIVERY_ATTACHMENT_LIMIT } from '../src/services/reply-delivery-store.js';
 import { sendFileAttachments, sendVideoAttachments } from '../src/cli/send-dispatch.js';
 import { renderQuotedMessage } from '../src/cli/quoted-render.js';
+import { FileLockTimeoutError, withFileLockSync } from '../src/utils/file-lock.js';
 
 const roots: string[] = [];
 function setup() {
@@ -111,4 +112,32 @@ describe('reply evidence delivery records', () => {
     expect(store.read(app, main, chat)?.attachments).toHaveLength(REPLY_DELIVERY_ATTACHMENT_LIMIT);
     void id;
   });
+  it('attaches the record when the quoted main message is an interactive card resolved by the merged-card pass', async () => {
+    // botmux send 的正文总是卡片（interactive）；quoted 生产上走 resolveMergedCard 成功后的分支返回。
+    const { root, store } = setup();
+    const id = store.begin(app, main, chat, [{ path: files[0], type: 'file' }]);
+    store.record(app, main, chat, id, 0, { messageId: 'om_csv' });
+    const rendered = await renderQuotedMessage(app,
+      { message_id: main, chat_id: chat, msg_type: 'interactive', body: { content: JSON.stringify({ elements: [] }) } },
+      async () => ({ extraResources: [] }),
+      async () => ({ text: '卡片结论', resources: [], structuredContent: '{"elements":[]}' }),
+      undefined, new ReplyDeliveryStore(root));
+    expect(rendered.content).toBe('卡片结论');
+    expect(rendered.mergedStructuredContent).toBe('{"elements":[]}');
+    expect(rendered.delivery?.attachments).toMatchObject([{ name: 'list.csv', status: 'sent', messageId: 'om_csv' }]);
+  });
+  it('waits for a concurrent writer holding the record lock instead of overwriting its read-modify-write', () => {
+    const { root, store } = setup();
+    const id = store.begin(app, main, chat, [{ path: 'a.txt', type: 'file' }]);
+    const dir = join(root, 'attachments', app, 'deliveries');
+    const path = join(dir, readdirSync(dir).find(name => name.endsWith('.json'))!);
+    // 另一个 send 进程正持锁读-改-写同一条记录：本次更新只能等锁，等不到就报错（交给 trackingErrors），
+    // 不能绕开锁直接落盘，否则两份并发回执会互相覆盖。
+    withFileLockSync(path, () => {
+      expect(() => store.record(app, main, chat, id, 0, { messageId: 'om_a' })).toThrow(FileLockTimeoutError);
+      expect(JSON.parse(readFileSync(path, 'utf8')).attachments[0].status).toBe('pending');
+    });
+    store.record(app, main, chat, id, 0, { messageId: 'om_a' });
+    expect(store.read(app, main, chat)?.attachments[0]).toMatchObject({ status: 'sent', messageId: 'om_a' });
+  }, 15_000);
 });

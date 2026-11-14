@@ -24,7 +24,7 @@ const fixture = fileURLToPath(new URL('./fixtures/send-reply-card-capture.ts', i
 const repo = fileURLToPath(new URL('..', import.meta.url));
 
 /** Run `botmux send` from a live topic turn; `@name` args become files in a temp dir. */
-function send(args: string[], env: Record<string, string> = {}): Record<string, any> {
+function send(args: string[], env: Record<string, string> = {}, prepareDataDir?: (data: string) => void): Record<string, any> {
   const root = mkdtempSync(join(tmpdir(), 'cli-send-attachment-ids-'));
   try {
     const data = join(root, 'data');
@@ -37,6 +37,7 @@ function send(args: string[], env: Record<string, string> = {}): Record<string, 
       sessionId: 'sid', status: 'active', cliId: 'codex', larkAppId: 'cli_test', chatId: 'oc_test',
       rootMessageId: 'om_root', scope: 'thread', chatType: 'group', workingDir: root,
     } });
+    prepareDataDir?.(data);
     const resolved = args.map(arg => {
       if (!arg.startsWith('@')) return arg;
       const path = join(root, arg.slice(1));
@@ -53,7 +54,9 @@ function send(args: string[], env: Record<string, string> = {}): Record<string, 
     const json = String(result.stdout).split('\n').find(line => line.startsWith('{') && line.includes('"messageId"'));
     expect(json, String(result.stdout)).toBeDefined();
     const value = JSON.parse(json!);
-    return { ...value, delivery: new ReplyDeliveryStore(data).read('cli_test', value.messageId, 'oc_test') };
+    // 只在 CLI 声称建了交付记录时回读；记录建失败的用例里交付目录本身就是坏的。
+    return { ...value, ...(value.replyDeliveryId
+      ? { delivery: new ReplyDeliveryStore(data).read('cli_test', value.messageId, 'oc_test') } : {}) };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -98,4 +101,17 @@ describe('botmux send 成功 JSON 带出附件消息 id', () => {
       { index: 1, type: 'media', status: 'sent', messageId: out.videoMessageIds[0] },
     ]);
   }, 80000);
+
+  it('交付记录建不起来时正文与附件照常送达且成功退出，只单独报告 attachmentTrackingErrors', () => {
+    // begin 发生在正文卡片已送达之后：它的异常若漏出 cmdSend，会被报成整体失败（exit 1），
+    // 调用方据此重发就是重复正文，附件也不会再发出。这里让交付目录位置被普通文件占住。
+    const out = send(['result', '--files', '@a.txt'], {}, data => {
+      mkdirSync(join(data, 'attachments', 'cli_test'), { recursive: true });
+      writeFileSync(join(data, 'attachments', 'cli_test', 'deliveries'), 'not a directory');
+    });
+    expect(out.attachmentMessageIds).toHaveLength(1);
+    expect(out.failedAttachments ?? []).toEqual([]);
+    expect(out.replyDeliveryId).toBeUndefined();
+    expect(out.attachmentTrackingErrors).toHaveLength(1);
+  }, 40000);
 });
