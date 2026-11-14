@@ -1,5 +1,4 @@
 import { resolveSessionModelPinView } from './session-model.js';
-import { scheduleSupportLines } from './schedule-followup.js';
 import { sessionContractPrimary } from './session-contract-primary.js';
 import { forkManualTurn } from './manual-turn-dispatch.js';
 import { showDefaultModelPicker, showSessionModelPicker } from '../im/lark/session-model-picker.js';
@@ -1147,7 +1146,7 @@ async function handleScheduleCommand(
       loc,
     );
     const silentNote = silent ? '\n' + t('schedule.silent_note', undefined, loc) : '';
-    await sessionReply(rootId, createdMsg + positionNote + silentNote + '\n' + scheduleSupportLines(task, loc).slice(1).join('\n'));
+    await sessionReply(rootId, createdMsg + positionNote + silentNote);
     return;
   }
 
