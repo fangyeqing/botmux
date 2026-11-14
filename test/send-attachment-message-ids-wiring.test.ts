@@ -83,4 +83,19 @@ describe('botmux send 成功 JSON 带出附件消息 id', () => {
     const pureVideo = send(['--videos', '@v.mp4', '--video-covers', '@c.png']);
     expect(pureVideo.videoMessageIds).toHaveLength(1);
   }, 80000);
+
+  it('文件与视频混合发送时按 files 在前、media 偏移 files.length 的同一套槽位落回执', () => {
+    // begin 的槽位顺序是 files 拼接 videos；视频 onResult 用 files.length + index 寻址。
+    // 偏移写错时两条回执会错位或落到不存在的槽位（trackingErrors），这里端到端钉住。
+    const out = send(['result', '--files', '@a.txt', '--videos', '@v.mp4', '--video-covers', '@c.png']);
+    expect(out.attachmentMessageIds).toHaveLength(1);
+    expect(out.videoMessageIds).toHaveLength(1);
+    expect(out.failedAttachments ?? []).toEqual([]);
+    expect(out.failedVideoAttachments ?? []).toEqual([]);
+    expect(out.attachmentTrackingErrors ?? []).toEqual([]);
+    expect(out.delivery.attachments).toMatchObject([
+      { index: 0, type: 'file', status: 'sent', messageId: out.attachmentMessageIds[0] },
+      { index: 1, type: 'media', status: 'sent', messageId: out.videoMessageIds[0] },
+    ]);
+  }, 80000);
 });

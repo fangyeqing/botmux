@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ReplyDeliveryStore } from '../src/services/reply-delivery-store.js';
+import { ReplyDeliveryStore, REPLY_DELIVERY_ATTACHMENT_LIMIT } from '../src/services/reply-delivery-store.js';
 import { sendFileAttachments, sendVideoAttachments } from '../src/cli/send-dispatch.js';
 import { renderQuotedMessage } from '../src/cli/quoted-render.js';
 
@@ -81,5 +81,34 @@ describe('reply evidence delivery records', () => {
     const rendered = await renderQuotedMessage(app, { message_id: main, chat_id: chat, msg_type: 'text', body: { content: '{"text":"main evidence"}' } },
       async () => ({ extraResources: [] }), undefined, undefined, store);
     expect(rendered.content).toContain('main evidence'); expect(rendered.deliveryError).toBe('unavailable');
+  });
+  it('refuses to record a result for a slot that was never begun', () => {
+    const { store } = setup();
+    const id = store.begin(app, main, chat, [{ path: 'a.txt', type: 'file' }]);
+    expect(() => store.record(app, main, chat, id, 7, { messageId: 'om_late' })).toThrow('Reply delivery attachment not found');
+    expect(() => store.record(app, main, chat, '00000000-0000-0000-0000-000000000000', 0, { messageId: 'om_late' }))
+      .toThrow('Reply delivery attachment not found');
+    // 拒绝写入不得留下半截状态：槽位仍为 pending。
+    expect(store.read(app, main, chat)?.attachments).toEqual([
+      expect.objectContaining({ index: 0, status: 'pending' }),
+    ]);
+  });
+  it('rejects an attachment receipt whose id equals the main message id on the write path', () => {
+    const { store } = setup();
+    const id = store.begin(app, main, chat, [{ path: 'a.txt', type: 'file' }]);
+    expect(() => store.record(app, main, chat, id, 0, { messageId: main })).toThrow('Invalid attachment receipt');
+    expect(store.read(app, main, chat)?.attachments[0].status).toBe('pending');
+  });
+  it('refuses a begin that would exceed the per-message attachment limit', () => {
+    const { store } = setup();
+    const oversized = Array.from({ length: REPLY_DELIVERY_ATTACHMENT_LIMIT + 1 }, (_, index) => ({ path: `f${index}.txt`, type: 'file' as const }));
+    expect(() => store.begin(app, main, chat, oversized)).toThrow('Reply delivery attachment limit exceeded');
+    expect(store.read(app, main, chat)).toBeUndefined();
+    const atLimit = Array.from({ length: REPLY_DELIVERY_ATTACHMENT_LIMIT }, (_, index) => ({ path: `f${index}.txt`, type: 'file' as const }));
+    const id = store.begin(app, main, chat, atLimit);
+    expect(store.read(app, main, chat)?.attachments).toHaveLength(REPLY_DELIVERY_ATTACHMENT_LIMIT);
+    expect(() => store.begin(app, main, chat, [{ path: 'one-more.txt', type: 'file' }])).toThrow('Reply delivery attachment limit exceeded');
+    expect(store.read(app, main, chat)?.attachments).toHaveLength(REPLY_DELIVERY_ATTACHMENT_LIMIT);
+    void id;
   });
 });

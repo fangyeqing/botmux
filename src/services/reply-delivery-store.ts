@@ -26,6 +26,16 @@ const appPattern = /^cli_[A-Za-z0-9_-]+$/;
 const messagePattern = /^om_[A-Za-z0-9_-]+$/;
 const chatPattern = /^oc_[A-Za-z0-9_-]+$/;
 
+/** Bucket subdirectory holding delivery index records. It is an evidence
+ *  index, not a per-message attachment download, so it must not share the
+ *  attachment-prune TTL (see core/attachment-prune.ts): the quoted main
+ *  message stays discoverable long after the 14-day download sweep. */
+export const REPLY_DELIVERY_DIRNAME = 'deliveries';
+
+/** Hard cap on indexed attachments per main message; mirrored by the reader's
+ *  record validation so a tampered oversized file fails closed. */
+export const REPLY_DELIVERY_ATTACHMENT_LIMIT = 256;
+
 /** Per-app metadata inside the existing attachment carve-out. Records contain
  * provider IDs and display names only, never bodies, credentials or local paths. */
 export class ReplyDeliveryStore {
@@ -34,7 +44,7 @@ export class ReplyDeliveryStore {
   private path(appId: string, messageId: string): string {
     if (!appPattern.test(appId) || !messagePattern.test(messageId)) throw new Error('Invalid reply delivery identity');
     const id = createHash('sha256').update(messageId).digest('hex');
-    return join(this.dataDir, 'attachments', appId, 'deliveries', `${id}.json`);
+    return join(this.dataDir, 'attachments', appId, REPLY_DELIVERY_DIRNAME, `${id}.json`);
   }
 
   read(appId: string, messageId: string, chatId: string): ReplyDelivery | undefined {
@@ -44,7 +54,7 @@ export class ReplyDeliveryStore {
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
     const value: ReplyDelivery = JSON.parse(raw);
     if (value.version !== 1 || value.appId !== appId || value.messageId !== messageId || value.chatId !== chatId
-      || !Number.isFinite(value.updatedAt) || !Array.isArray(value.attachments) || value.attachments.length > 256
+      || !Number.isFinite(value.updatedAt) || !Array.isArray(value.attachments) || value.attachments.length > REPLY_DELIVERY_ATTACHMENT_LIMIT
       || value.attachments.some(item => !item || typeof item.deliveryId !== 'string' || !/^[a-f0-9-]{36}$/.test(item.deliveryId)
         || !Number.isInteger(item.index) || item.index < 0 || typeof item.name !== 'string'
         || item.name !== basename(item.name) || /[\\\u0000-\u001f]/.test(item.name)
@@ -68,7 +78,7 @@ export class ReplyDeliveryStore {
   private mutate(appId: string, messageId: string, chatId: string, change: (record: ReplyDelivery) => void): ReplyDelivery {
     const path = this.path(appId, messageId);
     if (!chatPattern.test(chatId)) throw new Error('Invalid reply delivery chat');
-    mkdirSync(join(this.dataDir, 'attachments', appId, 'deliveries'), { recursive: true, mode: 0o700 });
+    mkdirSync(join(this.dataDir, 'attachments', appId, REPLY_DELIVERY_DIRNAME), { recursive: true, mode: 0o700 });
     return withFileLockSync(path, () => {
       const record = this.read(appId, messageId, chatId) ?? { version: 1, appId, messageId, chatId, updatedAt: Date.now(), attachments: [] };
       change(record);
@@ -81,7 +91,7 @@ export class ReplyDeliveryStore {
   begin(appId: string, messageId: string, chatId: string, files: readonly { path: string; type: 'file' | 'media' }[]): string {
     const deliveryId = randomUUID();
     this.mutate(appId, messageId, chatId, record => {
-      if (record.attachments.length + files.length > 256) throw new Error('Reply delivery attachment limit exceeded');
+      if (record.attachments.length + files.length > REPLY_DELIVERY_ATTACHMENT_LIMIT) throw new Error('Reply delivery attachment limit exceeded');
       record.attachments.push(...files.map((file, index) => ({ deliveryId, index,
         name: basename(file.path.replace(/\\/g, '/')).replace(/[\u0000-\u001f]/g, '').slice(0, 255) || 'attachment',
         type: file.type, status: 'pending' as const })));
