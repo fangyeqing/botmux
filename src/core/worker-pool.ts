@@ -1029,7 +1029,7 @@ import {
   prepareAutomaticSessionTitle,
   type AutomaticSessionTitlePlan,
 } from './session-title.js';
-import { applyAutomaticSessionTitle, hasManualSessionTitle } from './session-title-content.js';
+import { applyAutomaticSessionTitle, hasAutomaticSessionTitle, hasManualSessionTitle } from './session-title-content.js';
 import { resolveGroupJoinPrompt } from './auto-start.js';
 import { acknowledgeSessionReady } from './session-ready-handshake.js';
 import { recordDispatchInputCommit, resolveProseBotMentions, unboundInputCommitLogLevel } from './dispatch.js';
@@ -15512,7 +15512,7 @@ function applyPreparedInputTitle(ds: DaemonSession, plan: AutomaticSessionTitleP
   const previous = { title: ds.session.title, titleSource: ds.session.titleSource, titleUpdatedAt: ds.session.titleUpdatedAt,
     nativeSessionTitle: ds.session.nativeSessionTitle, nativeSessionTitleAwaitingContent: ds.session.nativeSessionTitleAwaitingContent,
     automaticTitleBootstrap: ds.session.automaticTitleBootstrap };
-  const changed = applyAutomaticSessionTitle(ds.session, plan.title, plan.source, new Date().toISOString());
+  const changed = plan.canonical && applyAutomaticSessionTitle(ds.session, plan.title, plan.source, new Date().toISOString());
   ds.session.nativeSessionTitleAwaitingContent = plan.awaitingContent ? true : undefined;
   if (plan.nativeTitle !== undefined) ds.session.nativeSessionTitle = plan.nativeTitle;
   if (plan.bootstrap) ds.session.automaticTitleBootstrap = plan.bootstrap;
@@ -20837,7 +20837,7 @@ function setupWorkerHandlers(
         const title = msg.title.trim();
         if (!title) break;
         const committed = commitAcceptedInputTitle(ds, {
-          title, source: 'cli', awaitingContent: false, nativeTitle: title,
+          title, source: 'cli', canonical: hasAutomaticSessionTitle(ds.session), awaitingContent: false, nativeTitle: title,
           expectedTitle: ds.session.title, expectedSource: ds.session.titleSource,
           expectedAwaiting: ds.session.nativeSessionTitleAwaitingContent,
         });

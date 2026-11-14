@@ -14,6 +14,9 @@ import { captureTitleBootstrap, updateSessionTitle, buildBotmuxLarkNativeSession
 import { loadWorkerPoolMessageHandlers } from './helpers/worker-pool-message-harness.js';
 import { loadWorkerPoolFunction } from './helpers/worker-pool-function-harness.js';
 import { loadWorkerFunction } from './helpers/worker-function-harness.js';
+import * as groupsStore from '../src/services/groups-store.js';
+import { initSessionGroups, registerSessionGroup, getSessionGroup } from '../src/services/session-groups-store.js';
+import { subscribeSessionGroupTitles } from '../src/services/session-group-title.js';
 
 // Exercise the real pool and SQLite store. Only the child process transport,
 // host pressure measurement and semantic generator are controlled dependencies.
@@ -22,6 +25,7 @@ const seed = '你是本群的 oncall 协同助手。入群后先阅读群内可�
 let bot: ReturnType<typeof bots.getBot>;
 let originalDir: string;
 let dataDir: string;
+let unsubscribeGroupTitles: (() => void) | undefined;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -33,7 +37,7 @@ beforeEach(() => {
   bot = {
     config: { larkAppId: APP, larkAppSecret: 'fixture-only', cliId: 'codex', autoStartOnGroupJoinPrompt: seed },
     botName: 'TitleBot', resolvedAllowedUsers: [],
-  } as ReturnType<typeof bots.getBot>;
+  } as unknown as ReturnType<typeof bots.getBot>;
   vi.spyOn(bots, 'getBot').mockImplementation(() => bot);
   // Host pressure is an unrelated fork admission dependency. Keep its actual
   // policy evaluator and give it a controlled, healthy host measurement.
@@ -52,6 +56,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unsubscribeGroupTitles?.();
+  unsubscribeGroupTitles = undefined;
   store.__testOnly_setBeforeRowPersist(undefined);
   pool.__testOnly_resetOrdinaryImDeliveries();
   store.init(APP); // Close the test's SQLite handle before removing its directory.
@@ -79,7 +85,7 @@ function reboot(ds: any) {
 }
 function nativeHandler(ds: any, worker: any) {
   pool.__testOnly_setupWorkerHandlers(ds, worker, undefined, ds.workerGeneration);
-  return async (message: any) => { await Promise.all(worker.listeners('message').map(listener => listener(message))); };
+  return async (message: any) => { await Promise.all(worker.listeners('message').map((listener: (message: any) => unknown) => listener(message))); };
 }
 
 function beginBootstrapActivation(ds: any, token: string, turnId: string): void {
@@ -160,7 +166,7 @@ describe('automatic session titles at input delivery boundaries', () => {
     expect(pool.forkWorker(ds, '冷恢复后的首条问题 rule 123',
       { resume: true, turnId: 'title-cold-first' },
       { onAdmission: value => { admission = value; } })).toBe(true);
-    const sentInit = capturedSend.mock.calls.map(call => call[0]).find(message => message.type === 'init');
+    const sentInit = capturedSend.mock.calls.map((call: any[]) => call[0]).find((message: any) => message.type === 'init');
     const afterFork = disk(ds);
     const workerTitleEvents: any[] = [];
     if (cli === 'codex') {
@@ -175,7 +181,7 @@ describe('automatic session titles at input delivery boundaries', () => {
         applyCodexNativeSessionTitle: vi.fn(async () => true), createCliAdapterSync: () => ({ resolvedBin: process.execPath }),
         codexNativeTitleEnv: () => ({}), registerNativeTitleForceClose() {},
         generateCodexAppThreadTitle: async () => { generationStarted(); await new Promise(resolve => setTimeout(resolve, 30000)); return undefined; },
-        buildBotmuxLarkNativeSessionTitle, send: message => workerTitleEvents.push(message), log() {} };
+        buildBotmuxLarkNativeSessionTitle, send: (message: any) => workerTitleEvents.push(message), log() {} };
       const syncTitle = loadWorkerFunction('syncFreshCodexNativeSessionTitle', titleScope);
       const done = syncTitle('native_probe_thread');
       await generationReady;
@@ -298,5 +304,133 @@ describe('automatic session titles at input delivery boundaries', () => {
     vi.advanceTimersByTime(1000);
     expect(pool.sendWorkerInput(ds, seed + '\n排查 rule 456 的失败', 'om_question')).toBe(true);
     expect(disk(ds).title).toBe('排查 rule 456 的失败');
+  });
+});
+
+describe('automatic titles beside entry-point titles and session-group naming', () => {
+  /** Real session-group store + title subscriber; only the Feishu rename API is controlled. */
+  function sessionTitleGroup(sessionId: string): string[] {
+    bot.config.sessionGroup = { naming: { mode: 'session-title' } };
+    initSessionGroups(APP);
+    registerSessionGroup('oc_probe_group', { ownerOpenId: 'ou_owner', lastSessionId: sessionId, autoTitleBaseName: '支持群' });
+    const renames: string[] = [];
+    vi.spyOn(groupsStore, 'renameChat').mockImplementation(async (_app, _chat, name, opts) => {
+      await Promise.resolve(); // the real wrapper prechecks membership before its write guard
+      opts?.beforeUpdate?.();
+      renames.push(name);
+      return { ok: true, oldName: '支持群', newName: name, changed: true };
+    });
+    unsubscribeGroupTitles = subscribeSessionGroupTitles();
+    return renames;
+  }
+  /** `join`: the awaiting-content marker the daemon persists when it creates an ordinary join session. */
+  function coldFresh(cli: 'codex' | 'traex' | 'claude-code', title: string, scope: 'thread' | 'chat' = 'thread', join = false) {
+    bot.config.cliId = cli;
+    bot.config.cliPathOverride = process.execPath;
+    bot.config.apiOnly = true;
+    const session = store.createSession('oc_probe_group', scope === 'chat' ? 'oc_probe_group' : 'om_probe_root', title, 'group', scope, { source: 'ordinary-feishu' });
+    Object.assign(session, { larkAppId: APP, chatDisplayName: '支持群', cliPathOverride: process.execPath, workingDir: config.session.dataDir, ...(join ? { nativeSessionTitleAwaitingContent: true } : {}) });
+    store.updateSession(session);
+    const worker: any = new EventEmitter();
+    Object.assign(worker, { killed: false, connected: true, pid: process.pid, stdout: new EventEmitter(), stderr: new EventEmitter(), kill: vi.fn(), send: vi.fn(() => true) });
+    vi.spyOn(selfSpawn, 'spawnWorker').mockReturnValue(worker);
+    const ds: any = { session, larkAppId: APP, chatId: session.chatId, chatType: 'group', scope, worker: null, spawnedAt: Date.now(), lastMessageAt: Date.now(), hasHistory: false };
+    // forkWorker wraps worker.send; keep the transport mock that records the init.
+    const send = worker.send;
+    const sentInit = () => send.mock.calls.map((call: any[]) => call[0]).find((message: any) => message.type === 'init');
+    return { ds, worker, send, sentInit };
+  }
+
+  it.each(['codex', 'traex'] as const)('keeps the entry point title of an ordinary %s opening and only prepares the native title', async cli => {
+    const { ds, sentInit } = coldFresh(cli, '[定时] 每日告警汇总');
+    expect(pool.forkWorker(ds, '汇总昨天 rule 123 的告警', { resume: false, turnId: 'om_schedule_open' })).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+    const row = disk(ds);
+    expect(row.title).toBe('[定时] 每日告警汇总');
+    expect(row.titleSource).toBeUndefined();
+    expect(row.nativeSessionTitle).toBe('[BotMux·Lark] 汇总昨天 rule 123 的告警');
+    expect(sentInit()?.nativeSessionTitlePrompt).toBe('汇总昨天 rule 123 的告警');
+  });
+
+  it('does not name a session-title group from the raw opening of a fresh Codex session', async () => {
+    const { ds } = coldFresh('codex', '帮我排查支付链路超时', 'chat');
+    const renames = sessionTitleGroup(ds.session.sessionId);
+    expect(pool.forkWorker(ds, '帮我排查支付链路超时 日志见附件 rule 123', { resume: false, turnId: 'om_group_open' })).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(renames).toEqual([]);
+    expect(getSessionGroup('oc_probe_group')?.titled).toBeFalsy();
+    expect(disk(ds).title).toBe('帮我排查支付链路超时');
+  });
+
+  it('names a session-title group from the semantic result after an awaited first question, not from the raw question', async () => {
+    const { ds, worker } = resident();
+    Object.assign(ds, { scope: 'chat' });
+    Object.assign(ds.session, { scope: 'chat', rootMessageId: 'oc_probe_group', status: 'active', larkAppId: APP });
+    store.updateSession(ds.session);
+    const renames = sessionTitleGroup(ds.session.sessionId);
+    expect(pool.sendWorkerInput(ds, '排查 rule 123 的队列拒绝', 'om_awaited_question')).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(disk(ds).title).toBe('排查 rule 123 的队列拒绝');
+    expect(renames).toEqual([]);
+    const handler = nativeHandler(ds, worker);
+    await handler({ type: 'native_session_title_generated', title: '[BotMux·Lark] 队列拒绝排查' });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(renames).toEqual(['队列拒绝排查']);
+    expect(disk(ds).title).toBe('队列拒绝排查');
+  });
+
+  it('keeps the entry point title of an ordinary session when its semantic result arrives', async () => {
+    const { ds, worker } = resident();
+    Object.assign(ds.session, { title: '[定时] 每日告警汇总', titleSource: undefined, nativeSessionTitleAwaitingContent: undefined, nativeSessionTitle: '[BotMux·Lark] 汇总昨天 rule 123 的告警' });
+    store.updateSession(ds.session);
+    const handler = nativeHandler(ds, worker);
+    await handler({ type: 'native_session_title_generated', title: '[BotMux·Lark] 告警汇总' });
+    const row = disk(ds);
+    expect(row.title).toBe('[定时] 每日告警汇总');
+    expect(row.nativeSessionTitle).toBe('[BotMux·Lark] 告警汇总');
+  });
+
+  // A configured prompt unrelated to the legacy display rule, titled the way the daemon titles a join session.
+  const joinPrompt = '加入后先阅读最近的群消息，等待明确分配的任务再开始处理，不要自行推断目标。';
+
+  it('titles a join opening from a question folded after the bootstrap on a non-native CLI', async () => {
+    const { ds } = coldFresh('claude-code', joinPrompt.substring(0, 50), 'thread', true);
+    bot.config.autoStartOnGroupJoinPrompt = joinPrompt;
+    expect(pool.forkWorker(ds, `<user_message>\n${joinPrompt}\n\n排查 rule 456 的失败\n</user_message>`, { resume: false, turnId: 'om_folded_open' })).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+    const row = disk(ds);
+    expect(row.title).toBe('排查 rule 456 的失败');
+    expect(row.nativeSessionTitleAwaitingContent).toBeUndefined();
+  });
+
+  it.each(['claude-code', 'codex'] as const)('keeps the entry point title when a non-join %s opening starts with the join prompt', async cli => {
+    const { ds } = coldFresh(cli, '[定时] 每日告警汇总');
+    bot.config.autoStartOnGroupJoinPrompt = joinPrompt;
+    expect(pool.forkWorker(ds, `${joinPrompt} 今日巡检 rule 1 的告警`, { resume: false, turnId: 'om_prefixed_open' })).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(disk(ds).title).toBe('[定时] 每日告警汇总');
+    expect(disk(ds).titleSource).toBeUndefined();
+  });
+
+  it.each(['claude-code', 'codex'] as const)('resumes naming a %s join session from the next accepted input after its bootstrap title write fails', async cli => {
+    const { ds, worker, send, sentInit } = coldFresh(cli, joinPrompt.substring(0, 50), 'thread', true);
+    bot.config.autoStartOnGroupJoinPrompt = joinPrompt;
+    let injected = 0;
+    // Fail exactly the bootstrap title commit (group-name placeholder), not the fork's other writes.
+    store.__testOnly_setBeforeRowPersist(() => { if (ds.session.title === '支持群') { injected++; throw new Error('injected EIO on bootstrap title'); } });
+    expect(pool.forkWorker(ds, joinPrompt, { resume: false, turnId: 'om_join_open' })).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+    store.__testOnly_setBeforeRowPersist(undefined);
+    expect(injected).toBe(1);
+    expect(sentInit()?.prompt).toBe(joinPrompt);
+    expect(disk(ds).title).toBe(joinPrompt.substring(0, 50));
+    reboot(ds);
+    Object.assign(ds, { worker, workerGeneration: ds.session.workerGeneration });
+    await vi.advanceTimersByTimeAsync(1000);
+    const sends = send.mock.calls.length;
+    expect(pool.sendWorkerInput(ds, '排查 rule 456 的失败', 'om_join_q1')).toBe(true);
+    expect(disk(ds).title).toBe('排查 rule 456 的失败');
+    expect(disk(ds).nativeSessionTitleAwaitingContent).toBeUndefined();
+    if (cli === 'codex') expect(send.mock.calls.slice(sends).map((call: any[]) => call[0]).find((message: any) => message.type === 'message')?.nativeSessionTitlePrompt).toBe('排查 rule 456 的失败');
   });
 });

@@ -55,6 +55,13 @@ export function hasManualSessionTitle(state: Pick<AutomaticTitleState, 'nativeSe
   return state.nativeSessionTitleUserDefined === true || ['user', 'dashboard', 'agent'].includes(state.titleSource ?? '');
 }
 
+/** A canonical title written by automatic naming ('initial' from content, 'cli' from a native semantic
+ * result). Entry points (topic text, schedule, trigger, …) create sessions with the source unset; those
+ * creation titles are not automatic and are never replaced by a late semantic result. */
+export function hasAutomaticSessionTitle(state: Pick<AutomaticTitleState, 'nativeSessionTitleUserDefined' | 'titleSource'>): boolean {
+  return !hasManualSessionTitle(state) && (state.titleSource === 'initial' || state.titleSource === 'cli');
+}
+
 /** A pure state change: the owner persists the complete native/canonical update once. */
 export function applyAutomaticSessionTitle(state: AutomaticTitleState, raw: unknown, source: 'initial' | 'cli', updatedAt: string): boolean {
   if (hasManualSessionTitle(state)) return false;

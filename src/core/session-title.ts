@@ -41,6 +41,8 @@ export function captureTitleBootstrap(raw: unknown, mentions?: readonly { name: 
 export interface AutomaticSessionTitlePlan {
   title: string;
   source: 'initial' | 'cli';
+  /** Whether `title`/`source` replace the canonical list title; native fields apply either way. */
+  canonical: boolean;
   awaitingContent: boolean;
   nativeTitle?: string;
   nativePrompt?: string;
@@ -58,14 +60,21 @@ export function prepareAutomaticSessionTitle(
 ): AutomaticSessionTitlePlan | undefined {
   if (hasManualSessionTitle(session)) return undefined;
   const input = sessionTitleInput(raw, options.mentions, options.bootstrapPrompts, session.automaticTitleBootstrap, titleBootstrapDigest);
-  const waiting = session.nativeSessionTitleAwaitingContent || isBootstrapDisplayTitle(session.title);
+  // Awaiting content: a join session (marked at birth), a mention-only native opening, or a legacy
+  // bootstrap title. Only then is the canonical title replaced; an ordinary opening keeps the title
+  // its entry point created (topic text, schedule, trigger, …) and native-title CLIs still get their
+  // launch title from its content.
+  const waiting = !!session.nativeSessionTitleAwaitingContent || isBootstrapDisplayTitle(session.title);
+  const canonical = waiting;
   if (!waiting && !options.fresh) return undefined;
-  if (!waiting && !options.native && !input.bootstrapOnly) return undefined;
+  if (!waiting && !options.native) return undefined;
   if (!input.text && !options.fresh) return undefined;
   const prompt = input.text ? Array.from(input.text).slice(0, BOTMUX_LARK_TITLE_PROMPT_MAX).join('') : undefined;
   const nativeTitle = buildBotmuxLarkNativeSessionTitle(prompt, undefined, options.groupName || '新话题');
   return {
-    title: nativeTitle.replace(/^\[BotMux·Lark\]\s*/, ''), source: prompt ? 'cli' : 'initial',
+    // Content-derived titles stay 'initial': 'cli' publishes to session-group naming, which renames a
+    // chat only once and must keep waiting for the native semantic result (session-title mode).
+    title: nativeTitle.replace(/^\[BotMux·Lark\]\s*/, ''), source: 'initial', canonical,
     awaitingContent: !prompt,
     ...(options.native ? { nativeTitle, ...(prompt ? { nativePrompt: prompt } : {}) } : {}),
     ...(input.bootstrapOnly ? { bootstrap: captureTitleBootstrap(raw, options.mentions) } : {}),
