@@ -2107,7 +2107,6 @@ export const messages: Record<string, string> = {
   'card.dashboard.schedules.detail.owner_label': 'owner: {bot} · {chat}',
   'card.dashboard.schedules.detail.next_label': 'next: {time}',
   'card.dashboard.schedules.detail.last_label': 'last: {time}',
-  'card.dashboard.schedules.detail.status_label': 'last result: {status}',
   'card.dashboard.schedules.detail.repeat_label': 'ran: {repeat}',
   'card.dashboard.schedules.detail.prompt_label': 'prompt: {prompt}',
   'card.dashboard.schedules.detail.next_runs_header': 'Upcoming runs:',
