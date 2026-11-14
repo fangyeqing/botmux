@@ -2164,10 +2164,12 @@ export function streamCardLabel(ds: DaemonSession): StreamCardLabel | undefined 
 }
 
 /** Push the current-turn execution observation to Dashboard rows. `null`
- *  (not undefined, which JSON drops) clears a settled or superseded turn. */
+ *  (not undefined, which JSON drops) clears a settled or superseded turn.
+ *  The display-only lastActivityAt rides along; lastMessageAt is never touched. */
 function publishExecutionActivityPatch(ds: DaemonSession): void {
+  const row = composeRowFromActive(ds, { includeTokenUsage: false });
   dashboardEventBus.publish({ type: 'session.update', body: { sessionId: ds.session.sessionId,
-    patch: { executionActivity: sessionExecutionActivity(ds) ?? null } } });
+    patch: { executionActivity: row.executionActivity ?? null, ...(row.lastActivityAt ? { lastActivityAt: row.lastActivityAt } : {}) } } });
 }
 
 const TURN_EXPLICIT_MENTION_MAX = 64;

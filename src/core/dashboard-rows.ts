@@ -36,10 +36,13 @@ import { sessionExecutionActivity } from './session-execution-activity.js';
 import type { ExecutionActivity } from './execution-activity.js';
 
 export interface SessionRow extends SessionMessagePreview {
-  /** Current-turn execution observation (working rows only). Kept apart from
-   *  `lastMessageAt`, which stays the last routed input: unread markers,
-   *  sorting and the group secretary's human-activity check read it. */
+  /** Current-turn execution observation (working rows only). */
   executionActivity?: ExecutionActivity;
+  /** Display-only latest activity: the last routed input or a later real CLI
+   *  progress event. Kept apart from `lastMessageAt`, which stays the last
+   *  routed input — unread markers, sorting and the group secretary's
+   *  human-activity check read that one. */
+  lastActivityAt?: number;
   modelPin?: ReturnType<typeof modelPinView>;
   /** Closed rows only: whether a new message in the topic will resume this session. */
   resumable?: boolean;
@@ -371,6 +374,8 @@ export function composeRowFromActive(ds: DaemonSession, opts?: DashboardRowOptio
   const topicLink = sessionThreadLink(ds.session, brand);
   const topicId = sessionThreadId(ds.session);
   const executionActivity = sessionExecutionActivity(ds);
+  const lastMessageAt = sessionLastActivityAtMs(ds.session) || ds.lastMessageAt;
+  const lastActivityAt = Math.max(lastMessageAt || 0, executionActivity?.lastProgressAtMs ?? 0);
   return {
     sessionId: ds.session.sessionId,
     larkAppId: ds.larkAppId,
@@ -404,7 +409,8 @@ export function composeRowFromActive(ds: DaemonSession, opts?: DashboardRowOptio
           : (ds.lastScreenStatus ?? (ds.workerReady === true ? 'working' : 'starting'))),
     adopt: !!ds.adoptedFrom,
     spawnedAt: sessionCreatedAtMs(ds.session) || ds.spawnedAt,
-    lastMessageAt: sessionLastActivityAtMs(ds.session) || ds.lastMessageAt,
+    lastMessageAt,
+    ...(lastActivityAt > 0 ? { lastActivityAt } : {}),
     ...(executionActivity ? { executionActivity } : {}),
     workingDir: ds.workingDir,
     chatId: ds.chatId,

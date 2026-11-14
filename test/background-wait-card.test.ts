@@ -38,6 +38,7 @@ import { dashboardEventBus } from '../src/core/dashboard-events.js';
 import { composeRowFromActive } from '../src/core/dashboard-rows.js';
 import { markSessionActivity } from '../src/core/session-activity.js';
 import { normalizeExecutionActivity } from '../src/core/execution-activity.js';
+import { sessionLastActivityAt } from '../src/dashboard/web/sessions.js';
 
 const APP = 'cli_background_wait_card';
 const oldDataDir = config.session.dataDir;
@@ -251,7 +252,7 @@ describe('Dashboard execution activity patches', () => {
     } finally { view.stop(); }
   });
 
-  it('keeps lastMessageAt on the last routed input while the CLI reports progress', async () => {
+  it('keeps lastMessageAt on the last routed input while the CLI reports progress (display time follows progress)', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     registerBot({ larkAppId: APP, larkAppSecret: 'test-secret', cliId: 'traex', replyCardMode: 'legacy' });
     ds.session.cliId = 'traex';
@@ -265,6 +266,9 @@ describe('Dashboard execution activity patches', () => {
       expect(view.current().executionActivity).toMatchObject({ phase: 'tool', lastProgressAtMs: Date.now() });
       expect(view.current().lastMessageAt).toBe(inputAt);
       expect(composeRowFromActive(ds, { includeTokenUsage: false }).lastMessageAt).toBe(inputAt);
+      // The 「最近」/「更新于」 display reads the separate activity time, which does follow progress.
+      expect(sessionLastActivityAt(view.current())).toBe(Date.now());
+      expect(sessionLastActivityAt(composeRowFromActive(ds, { includeTokenUsage: false }) as any)).toBe(Date.now());
     } finally { view.stop(); vi.useRealTimers(); }
   });
 
