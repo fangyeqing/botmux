@@ -52,8 +52,9 @@ export function taskKindLabel(kind: SessionTaskKind): string {
   return kind === 'needs_you' ? t('sessions.task.needsYou') : t(KIND_LABEL_KEYS[kind]);
 }
 
-export function sessionExecutionActivityText(raw: unknown): string {
-  const activity = normalizeExecutionActivity(raw);
+export function sessionExecutionActivityText(raw: unknown, now: number = Date.now()): string {
+  // Rows only get a new observation on phase/lifecycle events; durations advance with the render clock.
+  const activity = normalizeExecutionActivity(raw, now);
   const phase = activity?.phase ?? 'unknown';
   const label = t(`sessions.activity.${phase}`);
   const elapsed = activity?.elapsedSeconds === undefined ? '' : ` · ${t('sessions.activity.elapsed', { seconds: activity.elapsedSeconds })}`;
@@ -81,7 +82,7 @@ export function sessionTaskCardLine(status: SessionTaskStatus, now: number = Dat
       return { tone: 'need', label: needsYouReasonLabel(status.reason), ...(status.detail ? { detail: status.detail } : {}) };
     case 'working': {
       const span = status.since !== undefined ? taskDurationText(now - status.since) : '';
-      return { tone: 'work', label: t('sessions.task.working'), detail: sessionExecutionActivityText(activity) + (span ? ` · ${t('sessions.task.runningFor', { time: span })}` : '') };
+      return { tone: 'work', label: t('sessions.task.working'), detail: sessionExecutionActivityText(activity, now) + (span ? ` · ${t('sessions.task.runningFor', { time: span })}` : '') };
     }
     case 'delivered':
       return {

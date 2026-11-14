@@ -36,6 +36,22 @@ describe('shared execution observations', () => {
     ds.turnDispatchAttemptHighWater = { turnId: 'turn', dispatchAttempt: 2 };
     expect(sessionExecutionActivity(ds, 5000)).toMatchObject({ phase: 'unknown', source: 'unavailable' });
   });
+  it.each([
+    ['idle', { status: 'idle' }], ['limited', { status: 'limited' }], ['stalled', { status: 'stalled' }],
+    ['queued', { status: 'working', queued: true }], ['dormant', { status: 'dormant' }], ['closed', { status: 'closed' }],
+  ] as const)('a reachable session that is not working (%s) carries no execution facts', (_name, facts) => {
+    const activity = projectExecutionActivity(input);
+    const row = normalizeSessionRow({ sessionId: 'session', ...facts, executionActivity: activity }, { observedAt: 5000 });
+    expect(row.probe.status).toBe('ok');
+    expect(row.executionActivity).toBeUndefined();
+  });
+  it('advances durations to a live render clock without letting a slower viewer clock rewind them', () => {
+    const activity = projectExecutionActivity({ ...input, execution: { ...execution, stage: 'tool_started' } });
+    expect(normalizeExecutionActivity(activity, 65_000)).toMatchObject({ phase: 'tool', measuredAtMs: 65_000, elapsedSeconds: 64, progressAgeSeconds: 63 });
+    expect(normalizeExecutionActivity(activity, 1_000)).toMatchObject({ measuredAtMs: 5000, elapsedSeconds: 4, progressAgeSeconds: 3 });
+    expect(normalizeExecutionActivity({ ...activity, lastProgressAtMs: 6000 }, 65_000)).not.toHaveProperty('progressAgeSeconds');
+    expect(normalizeExecutionActivity(activity)).toMatchObject({ measuredAtMs: 5000, elapsedSeconds: 4 });
+  });
   it('probe failure cannot revive old execution facts', () => {
     const activity = projectExecutionActivity(input);
     expect(normalizeSessionRow({ sessionId: 'session', status: 'working', executionActivity: activity },

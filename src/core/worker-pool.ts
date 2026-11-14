@@ -21,6 +21,7 @@ import { cancelDeploymentContinuation, deploymentContinuationClaimCurrent } from
 import { deploymentContinuationAuthority } from './deployment-continuation-authority.js';
 import { CliProgressNotifier, cliProgressNoticeCard } from '../services/cli-progress-notice.js';
 import { sessionExecutionActivity } from './session-execution-activity.js';
+import { streamCardExecutionLabel } from './stream-card-activity.js';
 import { listPendingAsks } from './ask-broker.js';
 import { isHookPermissionAsk } from './ask-hook/types.js';
 import { captureCodexCleanupRelease, type CodexCleanupReleaseTicket } from '../services/codex-cleanup-release.js';
@@ -2156,11 +2157,15 @@ export function streamCardLabel(ds: DaemonSession): StreamCardLabel | undefined 
   if (ds.backgroundTaskCount && (ds.lastScreenStatus === 'working' || ds.lastScreenStatus === 'idle')) {
     return { backgroundTasks: ds.backgroundTaskCount };
   }
-  const observed = sessionExecutionActivity(ds);
-  const activity = observed ? { activity: observed.phase,
-    ...(observed.elapsedSeconds !== undefined ? { elapsedSeconds: observed.elapsedSeconds } : {}),
-    ...(observed.progressAgeSeconds !== undefined ? { progressAgeSeconds: observed.progressAgeSeconds } : {}) } : undefined;
-  return activity ?? idleCardLabel(ds);
+  const cliId = ds.session.cliLaunchSnapshot?.cliId ?? ds.session.cliId;
+  return streamCardExecutionLabel(cliId, sessionExecutionActivity(ds)) ?? idleCardLabel(ds);
+}
+
+/** Push the current-turn execution observation to Dashboard rows. `null`
+ *  (not undefined, which JSON drops) clears a settled or superseded turn. */
+function publishExecutionActivityPatch(ds: DaemonSession): void {
+  dashboardEventBus.publish({ type: 'session.update', body: { sessionId: ds.session.sessionId,
+    patch: { executionActivity: sessionExecutionActivity(ds) ?? null } } });
 }
 
 const TURN_EXPLICIT_MENTION_MAX = 64;
@@ -19867,9 +19872,7 @@ function setupWorkerHandlers(
           const publishedAt = execution.lastDashboardPublishedAtMs ?? 0;
           if (msg.stage !== 'model_output' || Date.now() - publishedAt >= 1000) {
             execution.lastDashboardPublishedAtMs = Date.now();
-            const row = composeRowFromActive(ds, { includeTokenUsage: false });
-            dashboardEventBus.publish({ type: 'session.update', body: { sessionId: ds.session.sessionId,
-              patch: { executionActivity: row.executionActivity, lastActivityAt: row.lastActivityAt, lastMessageAt: row.lastMessageAt } } });
+            publishExecutionActivityPatch(ds);
           }
           if (changed && sessionCliId(ds, getBot(ds.larkAppId).config) === 'traex') {
             syncUsageRefreshTimer(ds);
@@ -19901,8 +19904,11 @@ function setupWorkerHandlers(
         }
         beginCliNotice(msg.turnId, msg.dispatchAttempt);
         starts.delete(key);
-        starts.set(key, { startedAtMs: msg.startedAtMs, workerGeneration, lastProgressAtMs: msg.startedAtMs });
+        // No lastProgressAtMs yet: "last activity" only ever comes from a real
+        // turn_progress event, never from the write itself.
+        starts.set(key, { startedAtMs: msg.startedAtMs, workerGeneration });
         if (starts.size > 512) starts.delete(starts.keys().next().value!);
+        publishExecutionActivityPatch(ds);
         if (ds.session.workflowNode) cb.onWorkflowNodeTurnStarted?.(ds, { turnId: msg.turnId, startedAt: msg.startedAtMs });
         break;
       }
@@ -21137,6 +21143,9 @@ function setupWorkerHandlers(
                 // 不带上会让看板「待办」列停在旧值。?? null 让清空也能同步（patch 合并）。
                 openTodos: dashboardRow.openTodos ?? null,
                 busySinceAt: ds.busySinceAt ?? null,
+                // Leaving working clears the previous turn's activity; entering it
+                // carries the new turn's (null survives JSON, undefined would not).
+                executionActivity: dashboardRow.executionActivity ?? null,
               },
             },
           });

@@ -38,19 +38,28 @@ export function projectExecutionActivity(input: ExecutionActivityInput): Executi
   };
 }
 
-export function normalizeExecutionActivity(raw: unknown): ExecutionActivity | undefined {
+/**
+ * Validate an untrusted observation and recompute its derived durations. With
+ * `nowMs` (a live view re-rendering a pushed snapshot) the durations are
+ * advanced to that moment; the original measurement time is the floor, so a
+ * viewer clock behind the daemon's never rejects or rewinds the observation.
+ */
+export function normalizeExecutionActivity(raw: unknown, nowMs?: number): ExecutionActivity | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const value = raw as ExecutionActivity;
   if (!['unknown', 'tool', 'model_queue'].includes(value.phase)
     || !['unavailable', 'turn-start', 'cli-event', 'capacity-banner'].includes(value.source)
     || !Number.isFinite(value.measuredAtMs) || value.measuredAtMs < 0) return undefined;
+  const measuredAtMs = nowMs !== undefined && Number.isFinite(nowMs) ? Math.max(value.measuredAtMs, nowMs) : value.measuredAtMs;
   if (value.source === 'unavailable') return value.phase === 'unknown'
-    ? { phase: 'unknown', source: 'unavailable', measuredAtMs: value.measuredAtMs } : undefined;
+    ? { phase: 'unknown', source: 'unavailable', measuredAtMs } : undefined;
   if ((value.phase === 'tool' && value.source !== 'cli-event')
     || (value.phase === 'model_queue' && value.source !== 'capacity-banner')) return undefined;
   if (value.startedAtMs === undefined || !Number.isFinite(value.startedAtMs) || value.startedAtMs < 0 || value.startedAtMs > value.measuredAtMs) return undefined;
-  const projected = projectExecutionActivity({ status: 'working', workerGeneration: 1, nowMs: value.measuredAtMs,
+  const projected = projectExecutionActivity({ status: 'working', workerGeneration: 1, nowMs: measuredAtMs,
     capacityQueued: value.phase === 'model_queue', execution: { workerGeneration: 1, startedAtMs: value.startedAtMs,
-      ...(value.phase === 'tool' ? { stage: 'tool_started' as const } : {}), lastProgressAtMs: value.lastProgressAtMs } })!;
+      ...(value.phase === 'tool' ? { stage: 'tool_started' as const } : {}),
+      // Progress is only as fresh as the original measurement, never later.
+      lastProgressAtMs: value.lastProgressAtMs !== undefined && value.lastProgressAtMs <= value.measuredAtMs ? value.lastProgressAtMs : undefined } })!;
   return { ...projected, source: value.source };
 }

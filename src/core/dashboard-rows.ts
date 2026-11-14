@@ -36,8 +36,10 @@ import { sessionExecutionActivity } from './session-execution-activity.js';
 import type { ExecutionActivity } from './execution-activity.js';
 
 export interface SessionRow extends SessionMessagePreview {
+  /** Current-turn execution observation (working rows only). Kept apart from
+   *  `lastMessageAt`, which stays the last routed input: unread markers,
+   *  sorting and the group secretary's human-activity check read it. */
   executionActivity?: ExecutionActivity;
-  lastActivityAt?: number;
   modelPin?: ReturnType<typeof modelPinView>;
   /** Closed rows only: whether a new message in the topic will resume this session. */
   resumable?: boolean;
@@ -369,7 +371,6 @@ export function composeRowFromActive(ds: DaemonSession, opts?: DashboardRowOptio
   const topicLink = sessionThreadLink(ds.session, brand);
   const topicId = sessionThreadId(ds.session);
   const executionActivity = sessionExecutionActivity(ds);
-  const lastActivityAt = Math.max(sessionLastActivityAtMs(ds.session), ds.lastMessageAt || 0, executionActivity?.lastProgressAtMs || 0);
   return {
     sessionId: ds.session.sessionId,
     larkAppId: ds.larkAppId,
@@ -403,8 +404,7 @@ export function composeRowFromActive(ds: DaemonSession, opts?: DashboardRowOptio
           : (ds.lastScreenStatus ?? (ds.workerReady === true ? 'working' : 'starting'))),
     adopt: !!ds.adoptedFrom,
     spawnedAt: sessionCreatedAtMs(ds.session) || ds.spawnedAt,
-    lastMessageAt: lastActivityAt,
-    ...(lastActivityAt > 0 ? { lastActivityAt } : {}),
+    lastMessageAt: sessionLastActivityAtMs(ds.session) || ds.lastMessageAt,
     ...(executionActivity ? { executionActivity } : {}),
     workingDir: ds.workingDir,
     chatId: ds.chatId,

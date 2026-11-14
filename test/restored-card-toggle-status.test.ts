@@ -95,7 +95,6 @@ const NONCE = 'n_current';
 const label = (key: string) => t(key, undefined, 'zh');
 const IDLE = label('card.status.idle');
 const WORKING = label('card.status.working');
-const UNKNOWN_ACTIVITY = label('card.status.activity_unknown');
 const STARTING = label('card.status.starting');
 const LIMITED = label('card.status.limited');
 const STOP = label('card.btn.stop');
@@ -287,11 +286,11 @@ describe('toggle status without a fresh worker report', () => {
     expect(hasStopButton(card)).toBe(false);
   });
 
-  it('worker that has not reported a phase yet → unknown activity', async () => {
+  it('worker that has not reported yet → what the starting card shows (Grok: 工作中)', async () => {
     const ds = makeRestoredDs({ worker: makeFakeWorker(), workerReady: true });
     ds.session.cliId = 'grok';
     const card = await toggleCurrent(ds, activate(ds));
-    expect(statusOf(card)).toBe(UNKNOWN_ACTIVITY);
+    expect(statusOf(card)).toBe(WORKING);
   });
 
   it('a routing transfer between workers is not mistaken for a stopped CLI', async () => {
@@ -328,10 +327,10 @@ describe('toggle status without a fresh worker report', () => {
     expect(statusOf(card)).toBe(t('card.status.background_wait', { count: 2 }, 'zh'));
   });
 
-  it('running worker without phase evidence → unknown activity with the stop button', async () => {
+  it('running worker reporting working → still 工作中 with the stop button', async () => {
     const ds = makeRestoredDs({ worker: makeFakeWorker(), workerReady: true, lastScreenStatus: 'working' });
     const card = await toggleCurrent(ds, activate(ds));
-    expect(statusOf(card)).toBe(UNKNOWN_ACTIVITY);
+    expect(statusOf(card)).toBe(WORKING);
     expect(hasStopButton(card)).toBe(true);
   });
 
@@ -380,11 +379,11 @@ describe('刷新 / terminal keys on a restored session', () => {
     expect(hasStopButton(card)).toBe(false);
   });
 
-  it.each(clicks)('%s on a running worker keeps unknown activity with the stop button', async (action, extra) => {
+  it.each(clicks)('%s on a running worker still shows 工作中 with the stop button', async (action, extra) => {
     const worker = makeFakeWorker();
     const ds = restoredWithWebPort({ worker, workerReady: true, lastScreenStatus: 'working' });
     const card: any = await handleCardAction(cardClick(action, extra), activate(ds), APP_ID);
-    expect(statusOf(card)).toBe(UNKNOWN_ACTIVITY);
+    expect(statusOf(card)).toBe(WORKING);
     expect(hasStopButton(card)).toBe(true);
     expect(worker.send).toHaveBeenCalled();
   });
