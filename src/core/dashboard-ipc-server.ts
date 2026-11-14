@@ -7498,6 +7498,16 @@ export interface ScheduleRow {
   lastStatus?: 'running' | 'ok' | 'error' | 'skipped';
   lastError?: string;
   repeat?: { times: number | null; completed: number };
+  /** until-done state, run ledger and owner notification settings. They feed
+   *  the shared schedule support summary (schedule-followup) on the Dashboard
+   *  and Lark cards; without them the wire row renders the wrong stop
+   *  condition ("stops after one run") and never shows failure counts. The
+   *  anonymous public board still strips `ownerOpenId` via
+   *  redactSchedulesForPublic. */
+  untilDone?: ScheduledTask['untilDone'];
+  runStats?: ScheduledTask['runStats'];
+  notify?: ScheduledTask['notify'];
+  ownerOpenId?: ScheduledTask['ownerOpenId'];
   deliver?: 'origin' | 'local' | 'new-topic';
   silent?: boolean;
   followActive?: boolean;
@@ -7695,6 +7705,10 @@ function composeScheduleRow(t: ScheduledTask): ScheduleRow {
     lastStatus: t.lastStatus,
     lastError: t.lastError,
     repeat: t.repeat,
+    untilDone: t.untilDone,
+    runStats: t.runStats,
+    notify: t.notify,
+    ownerOpenId: t.ownerOpenId,
     deliver: t.deliver ?? 'origin',
     silent: t.silent,
     followActive: t.followActive === true ? true : undefined,

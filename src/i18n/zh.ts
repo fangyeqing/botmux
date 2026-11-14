@@ -2113,7 +2113,6 @@ export const messages: Record<string, string> = {
   'card.dashboard.schedules.detail.owner_label': '所属：{bot} · {chat}',
   'card.dashboard.schedules.detail.next_label': '下次：{time}',
   'card.dashboard.schedules.detail.last_label': '上次：{time}',
-  'card.dashboard.schedules.detail.status_label': '上次结果：{status}',
   'card.dashboard.schedules.detail.repeat_label': '已跑：{repeat}',
   'card.dashboard.schedules.detail.prompt_label': '提示词：{prompt}',
   'card.dashboard.schedules.detail.next_runs_header': '即将运行：',
